@@ -15,6 +15,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPRegressor
 
+from utils import backtest
+
 # ---------- Modeling Functions ----------
 def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False):
     """
@@ -322,7 +324,7 @@ if __name__ == "__main__":
 
     # Continue with time-based train-test split.
     final_df = final_df.sort_values("date").copy()
-    train_size = int(len(final_df) * 0.8)
+    train_size = int(len(final_df) * 0.75)
     train_df = final_df.iloc[:train_size]
     test_df = final_df.iloc[train_size:]
 
@@ -345,12 +347,13 @@ if __name__ == "__main__":
     # 12) Backtest using the combined signal on test set.
     test_df = test_df.sort_values("date").copy()
     test_df["combo_signal"] = test_preds["combo"]
-    backtest_df = backtest_portfolio(test_df, test_df["combo_signal"], initial_value=1.0)
+
+    backtest_df = backtest.backtest_portfolio(test_df, test_df["combo_signal"], initial_value=1.0)
     
     # 13) Save results and load them back.
     relative_path = "results/backtest_results.csv"
     loaded_backtest_df = save_and_load_results(backtest_df, relative_path)
-    
+
     print("\nBacktest Results (first 5 rows):")
     print(loaded_backtest_df.head())
     
