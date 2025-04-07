@@ -1,21 +1,20 @@
 import pandas as pd
 import numpy as np
+import os
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.linear_model import Ridge
 from sklearn.neural_network import MLPRegressor
-from sklearn.metrics import accuracy_score, confusion_matrix
-from sklearn.model_selection import TimeSeriesSplit, train_test_split
-from sklearn.pipeline import Pipeline
-import os
-import statsmodels.api as sm
-import data_loader
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import imeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPRegressor
+from sklearn.pipeline import Pipeline
+import statsmodels.api as sm
 
-from utils import backtest
+import backtest
+import data_loader
 
 # ---------- Modeling Functions ----------
 def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False):
@@ -43,7 +42,7 @@ def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False):
             hidden_layer_sizes=(50, 30),
             activation="tanh",
             max_iter=1000,
-            random_state=42,
+            random_state=37,
             solver="adam",
             learning_rate_init=0.07,
             alpha=0.1

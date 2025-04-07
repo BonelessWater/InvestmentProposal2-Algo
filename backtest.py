@@ -39,9 +39,9 @@ def backtest_portfolio(df: pd.DataFrame, raw_signals: pd.Series, initial_value: 
         trend_regime = df.loc[i, 'trend_regime']
 
         if vol_regime == 'high' and trend_regime == 'down':
-            exposure = 1.5 * signal
+            exposure = 1 * signal
         elif vol_regime == 'low' and trend_regime == 'down':
-            exposure = 0.5 * signal
+            exposure = 1 * signal
         else:
             exposure = 1.0 * signal
 
