@@ -6,21 +6,82 @@ from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.linear_model import Ridge
 from sklearn.neural_network import MLPRegressor
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.model_selection import imeSeriesSplit
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
 import statsmodels.api as sm
-
+from scipy import stats
 import backtest
 import data_loader
 
-# ---------- Modeling Functions ----------
-def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False):
+# Function to calculate Sortino ratio
+def calculate_sortino_ratio(returns, risk_free_rate=0):
+    """
+    Calculate the Sortino ratio with annualization (252 trading days)
+    """
+    excess_returns = returns - risk_free_rate
+    downside_returns = np.minimum(returns, 0)
+    downside_deviation = np.std(downside_returns) * np.sqrt(252)
+    
+    if downside_deviation == 0:
+        return np.nan
+    
+    return (np.mean(excess_returns) * 252) / downside_deviation
+
+# Function to calculate Calmar ratio
+def calculate_calmar_ratio(returns, max_drawdown):
+    """
+    Calculate the Calmar ratio (annualized return / maximum drawdown)
+    """
+    annual_return = np.mean(returns) * 252
+    
+    # Avoid division by zero (max_drawdown is typically negative)
+    if max_drawdown == 0:
+        return np.nan
+    
+    return -annual_return / max_drawdown  # Negative because max_drawdown is negative
+
+# Compute extended backtest metrics including Sortino and Calmar ratios
+def compute_extended_backtest_metrics(df):
+    """
+    Compute extended backtest metrics including Sharpe, Sortino, Calmar ratios, R², and max drawdown.
+    """
+    df = df.sort_values("date").copy()
+    df["daily_return"] = df["portfolio"].pct_change()
+    daily_returns = df["daily_return"].dropna()
+    
+    # Sharpe ratio
+    sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+    
+    # Sortino ratio
+    sortino = calculate_sortino_ratio(daily_returns)
+    
+    # Maximum drawdown
+    cum_max = df["portfolio"].cummax()
+    drawdown = (df["portfolio"] - cum_max) / cum_max
+    max_drawdown = drawdown.min()
+    
+    # Calmar ratio
+    calmar = calculate_calmar_ratio(daily_returns, max_drawdown)
+    
+    # R-squared
+    log_portfolio = np.log(df["portfolio"])
+    time_index = np.arange(len(log_portfolio))
+    X_time = sm.add_constant(time_index)
+    model = sm.OLS(log_portfolio, X_time).fit()
+    r2_value = model.rsquared
+    
+    return {
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "calmar": calmar,
+        "r2": r2_value,
+        "max_drawdown": max_drawdown
+    }
+
+# Modify the run_models function to accept a random_state parameter
+def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False, random_state=37):
     """
     Run models using time-series cross-validation on the training set, 
-    then predict on the test set.
+    then predict on the test set. Uses the provided random_state for reproducibility.
     """
     tscv = TimeSeriesSplit(n_splits=n_splits)
     
@@ -32,7 +93,7 @@ def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False):
     
     steps_mlr.extend([
         ("scale", StandardScaler()),
-        ("ridge", Ridge(alpha=1.0))
+        ("ridge", Ridge(alpha=1.0, random_state=random_state))
     ])
     mlr = Pipeline(steps_mlr)
     
@@ -42,7 +103,7 @@ def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False):
             hidden_layer_sizes=(50, 30),
             activation="tanh",
             max_iter=1000,
-            random_state=37,
+            random_state=random_state,  # Use the provided random_state
             solver="adam",
             learning_rate_init=0.07,
             alpha=0.1
@@ -101,143 +162,129 @@ def run_models(X_train, y_train, X_test, n_splits=5, use_polynomial=False):
     
     return cv_preds, test_preds, mlr, ann
 
-def evaluate_classification(y_true, preds):
+# Function to run multiple simulations with different random states
+def run_multiple_simulations(X_train, y_train, X_test, test_df, n_runs=30, n_splits=5, use_polynomial=False):
     """
-    Evaluate classification accuracy only on rows where predictions are available.
-    """
-    for col in preds.columns:
-        mask = preds[col].notna()
-        if mask.sum() == 0:
-            print(f"{col:7s} No predictions available.")
-            continue
-        y_pred = preds.loc[mask, col].astype(int)
-        y_true_valid = y_true[mask]
-        acc = np.mean(y_true_valid == y_pred)
-        print(f"{col:7s} Accuracy: {acc:.4f}")
-        print("Confusion Matrix:")
-        print(pd.crosstab(y_true_valid, y_pred, rownames=["Actual"], colnames=["Predicted"]))
-        print()
-
-def backtest_portfolio(df, signals, initial_value=1.0):
-    """
-    Simulate a backtest with CORRECTED LOGIC:
-      - Use today's signal to decide whether to invest in tomorrow's return.
-    Returns a DataFrame with a 'portfolio' column tracking portfolio value over time.
-    """
-    df = df.sort_values("date").copy()
-    signals = signals.sort_index()
-    portfolio = [initial_value]
-    
-    # For each day except the last, use today's signal to decide whether to
-    # invest in tomorrow's return.
-    for i in range(len(df) - 1):
-        if signals.iloc[i] == 1:  # Today's signal
-            ret = df["target"].iloc[i]  # Tomorrow's return
-            new_value = portfolio[-1] * (1 + ret)
-        else:
-            new_value = portfolio[-1]
-        portfolio.append(new_value)
-    
-    df["portfolio"] = portfolio
-    return df
-
-def save_and_load_results(df, rel_path):
-    """
-    Save the DataFrame 'df' to CSV using the given relative path,
-    then load the CSV back into a DataFrame.
-    """
-    directory = os.path.dirname(rel_path)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    
-    df.to_csv(rel_path, index=False)
-    loaded_df = pd.read_csv(rel_path, parse_dates=["date"])
-    return loaded_df
-
-def compute_backtest_metrics(df):
-    """
-    Compute backtest metrics from a DataFrame that contains a 'date' column and a 'portfolio' column.
+    Run the model multiple times with different random states and collect performance metrics.
     
     Returns:
-      sharpe: Annualized Sharpe ratio (assumes 252 trading days)
-      r2_value: R² of the regression of log(portfolio) vs. time index
-      max_drawdown: Maximum drawdown (as a negative fraction)
+        DataFrame with performance metrics for each run
+        DataFrame with confidence intervals for each metric
     """
-    df = df.sort_values("date").copy()
-    df["daily_return"] = df["portfolio"].pct_change()
-    daily_returns = df["daily_return"].dropna()
+    # Create a list to store results from each run
+    results = []
     
-    sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+    # Run the model n_runs times with different random states
+    for run in range(n_runs):
+        random_state = run + 1  # Use run index + 1 as random state
+        print(f"Running simulation {run+1}/{n_runs} with random_state={random_state}")
+        
+        # Run models with the current random state
+        _, test_preds, _, _ = run_models(
+            X_train, y_train, X_test, 
+            n_splits=n_splits, 
+            use_polynomial=use_polynomial,
+            random_state=random_state
+        )
+        
+        # Add the combo signal to the test dataframe
+        test_df_run = test_df.sort_values("date").copy()
+        test_df_run["combo_signal"] = test_preds["combo"]
+        
+        # Run backtest
+        backtest_df = backtest.backtest_portfolio(test_df_run, test_df_run["combo_signal"], initial_value=1.0)
+        
+        # Compute metrics
+        metrics = compute_extended_backtest_metrics(backtest_df)
+        metrics["run"] = run + 1
+        metrics["random_state"] = random_state
+        metrics["final_value"] = backtest_df["portfolio"].iloc[-1]
+        
+        results.append(metrics)
     
-    cum_max = df["portfolio"].cummax()
-    drawdown = (df["portfolio"] - cum_max) / cum_max
-    max_drawdown = drawdown.min()
+    # Convert results to DataFrame
+    results_df = pd.DataFrame(results)
     
-    log_portfolio = np.log(df["portfolio"])
-    time_index = np.arange(len(log_portfolio))
-    X_time = sm.add_constant(time_index)
-    model = sm.OLS(log_portfolio, X_time).fit()
-    r2_value = model.rsquared
+    # Calculate confidence intervals (95%)
+    confidence_intervals = {}
+    alpha = 0.05  # 95% confidence level
     
-    return sharpe, r2_value, max_drawdown
+    for metric in ["sharpe", "sortino", "calmar", "r2", "max_drawdown", "final_value"]:
+        values = results_df[metric].dropna()
+        
+        if len(values) >= 2:  # Need at least 2 values to calculate confidence interval
+            mean = np.mean(values)
+            std_err = stats.sem(values)
+            conf_interval = stats.t.interval(1-alpha, len(values)-1, loc=mean, scale=std_err)
+            
+            confidence_intervals[metric] = {
+                "mean": mean,
+                "std": np.std(values),
+                "min": np.min(values),
+                "max": np.max(values),
+                "lower_bound": conf_interval[0],
+                "upper_bound": conf_interval[1]
+            }
+        else:
+            confidence_intervals[metric] = {
+                "mean": np.mean(values) if len(values) > 0 else np.nan,
+                "std": np.nan,
+                "min": np.min(values) if len(values) > 0 else np.nan,
+                "max": np.max(values) if len(values) > 0 else np.nan,
+                "lower_bound": np.nan,
+                "upper_bound": np.nan
+            }
+    
+    # Convert confidence intervals to DataFrame
+    ci_df = pd.DataFrame(confidence_intervals).T
+    
+    return results_df, ci_df
 
-def plot_profit_over_time(df, initial_value=1.0):
+# Function to plot metric distributions
+def plot_metric_distributions(results_df):
     """
-    Plot the profit over time, where profit is defined as portfolio value minus the initial investment.
+    Create histograms for each performance metric.
     """
-    df = df.sort_values("date").copy()
-    df["profit"] = df["portfolio"] - initial_value
+    metrics = ["sharpe", "sortino", "calmar", "r2", "max_drawdown", "final_value"]
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
     
-    plt.figure(figsize=(12,6))
-    plt.plot(df["date"], df["profit"], marker="o")
-    plt.xlabel("Date")
-    plt.ylabel("Profit")
-    plt.title("Profit Over Time")
-    plt.xticks(rotation=45)
+    for i, metric in enumerate(metrics):
+        ax = axes[i]
+        data = results_df[metric].dropna()
+        
+        ax.hist(data, bins=10, alpha=0.7, color='skyblue', edgecolor='black')
+        ax.axvline(x=np.mean(data), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(data):.4f}')
+        
+        # Add confidence interval
+        mean = np.mean(data)
+        std_err = stats.sem(data)
+        conf_interval = stats.t.interval(0.95, len(data)-1, loc=mean, scale=std_err)
+        
+        ax.axvline(x=conf_interval[0], color='green', linestyle=':', linewidth=2, 
+                   label=f'95% CI: [{conf_interval[0]:.4f}, {conf_interval[1]:.4f}]')
+        ax.axvline(x=conf_interval[1], color='green', linestyle=':', linewidth=2)
+        
+        ax.set_title(f'Distribution of {metric}')
+        ax.set_xlabel(metric)
+        ax.set_ylabel('Frequency')
+        ax.legend()
+        ax.grid(alpha=0.3)
+    
     plt.tight_layout()
-    plt.grid(True, alpha=0.3)
+    plt.savefig('results/metric_distributions.png')
     plt.show()
 
-def evaluate_feature_importance(X, y, n_splits=5, use_polynomial=False):
+# Main simulation function
+def main_simulation():
     """
-    Iteratively drop each feature and compare the cross-validated accuracy (using the 'combo'
-    signal) of the model with and without that feature.
-    
-    Returns a list of features that, when dropped, decrease accuracy compared to using all features.
-    (i.e. these features have a positive impact on predictions)
+    Main function to run the full simulation pipeline.
     """
-    from sklearn.metrics import accuracy_score
-
-    # Evaluate baseline CV accuracy using the full feature set.
-    cv_preds_full, _, _, _ = run_models(X, y, X, n_splits=n_splits, use_polynomial=use_polynomial)
-    # We use the 'combo' predictions; ensure we compare the binary outputs.
-    mask_full = cv_preds_full["combo"].notna()
-    baseline_accuracy = np.mean((y[mask_full].astype(int) == cv_preds_full.loc[mask_full, "combo"].astype(int)))
-    print(f"Baseline CV Accuracy (combo): {baseline_accuracy:.4f}")
-
-    positive_features = []
-    
-    # Iterate over each feature in the dataset.
-    for feature in X.columns:
-        X_reduced = X.drop(columns=[feature])
-        cv_preds_reduced, _, _, _ = run_models(X_reduced, y, X_reduced, n_splits=n_splits, use_polynomial=use_polynomial)
-        mask_red = cv_preds_reduced["combo"].notna()
-        reduced_accuracy = np.mean((y[mask_red].astype(int) == cv_preds_reduced.loc[mask_red, "combo"].astype(int)))
-        print(f"Dropping {feature:30s} => CV Accuracy (combo): {reduced_accuracy:.4f}")
-        
-        # If the model performs worse without the feature, then the feature has a positive impact.
-        if baseline_accuracy > reduced_accuracy:
-            positive_features.append(feature)
-    
-    return positive_features
-
-# ---------- Main Execution ----------
-if __name__ == "__main__":
-    # 1) Load and clean main SAP data.
+    # 1) Load and clean main SAP data
     sap_df = data_loader.load_and_clean_sap_data("data/SAP_target.csv")
     sap_df = data_loader.engineer_target(sap_df)
     
-    # 2) Merge temperature data.
+    # 2) Merge temperature data
     sap_df = data_loader.add_temperature_data(
         sap_df,
         fc_d_minus1_path="data/weather/TemperatureForecastD-1.csv",
@@ -258,7 +305,7 @@ if __name__ == "__main__":
         correction_factor_se_path="data/weather/WeatherCorrectionFactorForecast(SE).csv"
     )
     
-    # 3) Merge linepack data.
+    # 3) Merge linepack data
     sap_df = data_loader.add_linepack_data(
         sap_df,
         closing_lp_path="data/linepack/ClosingLinepackactual.csv",
@@ -267,7 +314,7 @@ if __name__ == "__main__":
         predicted_closing_lp_path="data/linepack/PredictedClosingLinepack(PCLP1).csv"
     )
     
-    # 4) Merge demand data.
+    # 4) Merge demand data
     sap_df = data_loader.add_demand_data(
         sap_df,
         demand_cold_path="data/demand/Demand-Cold.csv",
@@ -278,97 +325,91 @@ if __name__ == "__main__":
         demand_ntssn_path="data/demand/DemandNTSSN.csv"
     )
     
-    # 5) Add derived demand features.
+    # 5) Add derived demand features
     sap_df = data_loader.add_demand_features(sap_df)
     
-    # 6) Add LDC features (including temperature, linepack, and now demand features).
+    # 6) Add LDC features
     sap_df = data_loader.add_ldc_features(sap_df, t_ref=65)
     
-    # 7) Build feature matrix; the target is the binary signal (1 = buy, 0 = sell/hold).
+    # 7) Build feature matrix
     X, y, final_df = data_loader.build_feature_matrix(sap_df)
-    print(f"Feature matrix shape: {X.shape}")
+    print(f"Original feature matrix shape: {X.shape}")
     
-    # Define the list of best features identified from your analysis.
+    # Define best features
     best_features = [
-        "CDD",
-        "demand_lag1",
-        "is_weekend",
-        "is_holiday",
-        "predicted_closing_linepack",
-        "lp_closing_pred_error",
-        "temp_fc_d_minus1",
-        "temp_sn_d_minus1",
-        "temp_sn_d",
-        "temp_sn_d_plus1",
-        "temp_dev_fc_minus1",
-        "temp_dev_fc",
+        "CDD", "demand_lag1", "is_weekend", "is_holiday",
+        "predicted_closing_linepack", "lp_closing_pred_error",
+        "temp_fc_d_minus1", "temp_sn_d_minus1", "temp_sn_d",
+        "temp_dev_fc_minus1", "temp_dev_fc",
         "CompositeWeatherVariableForecastLDZ(SE)",
         "WeatherCorrectionFactorForecast(NW)",
         "WeatherCorrectionFactorForecast(SC)",
-        "demand_actual_ntsd_plus1",
-        "demand_diff",
-        "demand_avg",
-        "demand_forecast_error",
-        "demand_nts_spread",
-        "dow_0",
-        "dow_1",
-        "dow_2",
-        "dow_4",
-        "dow_6"
+        "demand_diff", "demand_avg", "demand_nts_spread",
+        "dow_0", "dow_1", "dow_2", "dow_4", "dow_6"
     ]
 
-    # Filter the full feature matrix to keep only the best features.
     X = X[best_features]
-    print("Filtered feature matrix shape:", X.shape)
+    X = X.dropna()
+    y = y.loc[X.index]
+    final_df = final_df.loc[X.index]
 
-    # Continue with time-based train-test split.
+    future_cols = [
+        "demand_actual_ntsd_plus1",
+        "temp_sn_d_plus1",
+        "temp_ac_d_plus1",
+        "temp_dev_fc_plus1",
+        "linepack_hourly_agg_d_plus1",
+    ]
+    X = X.drop(columns=[col for col in future_cols if col in X.columns], errors='ignore')
+    print(f"Filtered feature matrix shape: {X.shape}")
+
+    X = X.dropna()
+    y = y.loc[X.index]
+    final_df = final_df.loc[X.index]
+
+    final_df = final_df.sort_values("date")
+    X["demand_lag1"] = final_df["close"].shift(1)
+    X["demand_lag7"] = final_df["close"].shift(7)
+    X = X.dropna()
+    y = y.loc[X.index]
+    final_df = final_df.loc[X.index]
+    
+    # Split data
     final_df = final_df.sort_values("date").copy()
     train_size = int(len(final_df) * 0.75)
     train_df = final_df.iloc[:train_size]
     test_df = final_df.iloc[train_size:]
-
+    
     X_train = X.loc[train_df.index]
     y_train = y.loc[train_df.index]
     X_test = X.loc[test_df.index]
     y_test = y.loc[test_df.index]
-
-    # Run your modeling pipeline with the filtered features.
-    cv_preds, test_preds, mlr_model, ann_model = run_models(
-        X_train, y_train, X_test, n_splits=5, use_polynomial=False
+    
+    # Create results directory if it doesn't exist
+    if not os.path.exists("results"):
+        os.makedirs("results")
+    
+    # Run simulations
+    print("Starting multiple simulations...")
+    results_df, ci_df = run_multiple_simulations(
+        X_train, y_train, X_test, test_df, 
+        n_runs=100, 
+        n_splits=5, 
+        use_polynomial=False
     )
+    
+    # Save results
+    results_df.to_csv("results/simulation_results.csv", index=False)
+    ci_df.to_csv("results/confidence_intervals.csv")
+    
+    # Print confidence intervals
+    print("\n95% Confidence Intervals:")
+    print(ci_df[["mean", "lower_bound", "upper_bound"]])
+    
+    # Plot distributions
+    plot_metric_distributions(results_df)
+    
+    return results_df, ci_df
 
-    print("\nCross-Validation Performance with Filtered Features:")
-    evaluate_classification(y_train, cv_preds)
-
-    print("\nTest Set Performance with Filtered Features:")
-    evaluate_classification(y_test, test_preds)
-    
-    # 12) Backtest using the combined signal on test set.
-    test_df = test_df.sort_values("date").copy()
-    test_df["combo_signal"] = test_preds["combo"]
-
-    backtest_df = backtest.backtest_portfolio(test_df, test_df["combo_signal"], initial_value=1.0)
-    
-    # 13) Save results and load them back.
-    relative_path = "results/backtest_results.csv"
-    loaded_backtest_df = save_and_load_results(backtest_df, relative_path)
-
-    print("\nBacktest Results (first 5 rows):")
-    print(loaded_backtest_df.head())
-    
-    sharpe, r2_value, max_drawdown = compute_backtest_metrics(loaded_backtest_df)
-    
-    # 14) Print the metrics.
-    print("\nBacktest Metrics:")
-    print(f"Sharpe Ratio: {sharpe:.4f}")
-    print(f"R²: {r2_value:.4f}")
-    print(f"Max Drawdown: {max_drawdown:.4f}")
-    
-    # 15) Visualize backtest results.
-    plot_profit_over_time(loaded_backtest_df, initial_value=1.0)# Example usage after building your feature matrix:
-    
-    # (Assuming X, y have already been created using data_loader.build_feature_matrix)
-    #positive_feats = evaluate_feature_importance(X, y, n_splits=5, use_polynomial=False)
-    #print("\nFeatures with positive outcomes on prediction:")
-    #for feat in positive_feats:
-    #    print(feat)
+if __name__ == "__main__":
+    results_df, ci_df = main_simulation()

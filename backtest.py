@@ -2,10 +2,10 @@ import numpy as np
 import pandas as pd
 
 def apply_signal_smoothing(signals: pd.Series, window: int = 3, persist: int = 2) -> pd.Series:
-    smoothed = signals.rolling(window=window, min_periods=1).mean()
+    smoothed = signals.shift(1).rolling(window=window, min_periods=1).mean()
     binary = (smoothed > 0.5).astype(int)
     final_signal = binary.copy()
-    binary = binary.reset_index(drop=True)  # Ensure integer index for access
+    binary = binary.reset_index(drop=True)
     for i in range(persist, len(binary)):
         if not all(binary.iloc[i - persist:i] == binary.iloc[i]):
             final_signal.iloc[i] = final_signal.iloc[i - 1]
@@ -13,15 +13,14 @@ def apply_signal_smoothing(signals: pd.Series, window: int = 3, persist: int = 2
 
 def compute_market_regime(df: pd.DataFrame, vol_window: int = 5, trend_window: int = 5):
     df = df.copy()
-    df['volatility'] = df['target'].rolling(vol_window).std()
-    df['trend'] = df['target'].rolling(trend_window).mean().diff()
-
+    df['volatility'] = df['target'].shift(1).rolling(vol_window).std()
+    df['trend'] = df['target'].shift(1).rolling(trend_window).mean().diff()
     df['vol_regime'] = np.where(df['volatility'] > df['volatility'].median(), 'high', 'low')
     df['trend_regime'] = np.where(df['trend'] < 0, 'down', 'up')
     return df
 
 def compute_atr(df: pd.DataFrame, atr_window: int = 5) -> pd.Series:
-    return df['target'].abs().rolling(atr_window).mean()
+    return df['target'].abs().shift(1).rolling(atr_window).mean()
 
 def backtest_portfolio(df: pd.DataFrame, raw_signals: pd.Series, initial_value: float = 1.0) -> pd.DataFrame:
     df = df.sort_values("date").copy().reset_index(drop=True)
