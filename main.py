@@ -337,42 +337,36 @@ def main_simulation():
     
     # Define best features
     best_features = [
-        "CDD", "demand_lag1", "is_weekend", "is_holiday",
-        "predicted_closing_linepack", "lp_closing_pred_error",
-        "temp_fc_d_minus1", "temp_sn_d_minus1", "temp_sn_d",
-        "temp_dev_fc_minus1", "temp_dev_fc",
+        "CDD",
+        "demand_lag1",
+        "is_weekend",
+        "is_holiday",
+        "predicted_closing_linepack",
+        "lp_closing_pred_error",
+        "temp_fc_d_minus1",
+        "temp_sn_d_minus1",
+        "temp_sn_d",
+        "temp_sn_d_plus1",
+        "temp_dev_fc_minus1",
+        "temp_dev_fc",
         "CompositeWeatherVariableForecastLDZ(SE)",
         "WeatherCorrectionFactorForecast(NW)",
         "WeatherCorrectionFactorForecast(SC)",
-        "demand_diff", "demand_avg", "demand_nts_spread",
-        "dow_0", "dow_1", "dow_2", "dow_4", "dow_6"
-    ]
-
-    X = X[best_features]
-    X = X.dropna()
-    y = y.loc[X.index]
-    final_df = final_df.loc[X.index]
-
-    future_cols = [
         "demand_actual_ntsd_plus1",
-        "temp_sn_d_plus1",
-        "temp_ac_d_plus1",
-        "temp_dev_fc_plus1",
-        "linepack_hourly_agg_d_plus1",
+        "demand_diff",
+        "demand_avg",
+        "demand_forecast_error",
+        "demand_nts_spread",
+        "dow_0",
+        "dow_1",
+        "dow_2",
+        "dow_4",
+        "dow_6"
     ]
-    X = X.drop(columns=[col for col in future_cols if col in X.columns], errors='ignore')
+    
+    # Filter features
+    X = X[best_features]
     print(f"Filtered feature matrix shape: {X.shape}")
-
-    X = X.dropna()
-    y = y.loc[X.index]
-    final_df = final_df.loc[X.index]
-
-    final_df = final_df.sort_values("date")
-    X["demand_lag1"] = final_df["close"].shift(1)
-    X["demand_lag7"] = final_df["close"].shift(7)
-    X = X.dropna()
-    y = y.loc[X.index]
-    final_df = final_df.loc[X.index]
     
     # Split data
     final_df = final_df.sort_values("date").copy()
@@ -393,7 +387,7 @@ def main_simulation():
     print("Starting multiple simulations...")
     results_df, ci_df = run_multiple_simulations(
         X_train, y_train, X_test, test_df, 
-        n_runs=100, 
+        n_runs=10, 
         n_splits=5, 
         use_polynomial=False
     )

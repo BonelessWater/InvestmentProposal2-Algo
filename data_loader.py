@@ -59,7 +59,7 @@ def engineer_target(df):
     
     # Create a binary signal for trading: 1 if target > 0, else 0.
     df["signal"] = (df["target"] > 0).astype(int)
-    
+
     return df
 
 # ---------- Temperature Data Loader ----------

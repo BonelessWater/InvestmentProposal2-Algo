@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import os
 
 def apply_signal_smoothing(signals: pd.Series, window: int = 3, persist: int = 2) -> pd.Series:
     smoothed = signals.shift(1).rolling(window=window, min_periods=1).mean()
@@ -38,14 +39,14 @@ def backtest_portfolio(df: pd.DataFrame, raw_signals: pd.Series, initial_value: 
         trend_regime = df.loc[i, 'trend_regime']
 
         if vol_regime == 'high' and trend_regime == 'down':
-            exposure = 1 * signal
+            exposure = 0.5 * signal
         elif vol_regime == 'low' and trend_regime == 'down':
-            exposure = 1 * signal
+            exposure = 0.5 * signal
         else:
-            exposure = 1.0 * signal
+            exposure = 0.5 * signal
 
         today_val = portfolio[-1]
-        next_ret = df.loc[i, 'target']
+        next_ret = df.loc[i + 1, 'target']  # use next day's return explicitly
         next_val = today_val * (1 + exposure * next_ret)
 
         atr_threshold = 2.0 * df.loc[i, 'atr']
@@ -61,4 +62,11 @@ def backtest_portfolio(df: pd.DataFrame, raw_signals: pd.Series, initial_value: 
     exposures.append(exposures[-1] if exposures else 0)
     df['portfolio'] = portfolio
     df['exposure'] = exposures
+
+    # Save results to CSV
+    output_dir = "results"
+    os.makedirs(output_dir, exist_ok=True)
+    df.to_csv(os.path.join(output_dir, "backtest_results.csv"), index=False)
+
     return df
+
