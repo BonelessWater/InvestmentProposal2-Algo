@@ -54,7 +54,7 @@ def compute_extended_backtest_metrics(df):
 
     # Daily risk free rate
     risk_free_rate = 0.045 / 252 
-    print(daily_returns.mean(), daily_returns.std())
+    print(f'Mean daily returns: {daily_returns.mean()}, Std of daily returns: {daily_returns.std()}')
 
     # Sharpe ratio
     sharpe = ((daily_returns.mean() - risk_free_rate) / daily_returns.std()) * np.sqrt(252)
@@ -136,7 +136,7 @@ def run_models(X_train, y_train, X_test, y_test, n_splits=5, use_polynomial=Fals
     steps_ann.extend([
         ("scale", StandardScaler()),
         ("mlp", MLPRegressor(
-            hidden_layer_sizes=(50, 30, 30, 10),
+            hidden_layer_sizes=(50, 30),
             activation="tanh",
             max_iter=1000,
             random_state=random_state,
@@ -453,7 +453,7 @@ def main_simulation():
     print("Starting multiple simulations...")
     results_df, ci_df = run_multiple_simulations(
         X_train, y_train, X_test, y_test, test_df,
-        n_runs=2, 
+        n_runs=100, 
         n_splits=5, 
         use_polynomial=False
     )

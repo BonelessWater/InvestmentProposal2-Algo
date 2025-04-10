@@ -5,6 +5,7 @@ import matplotlib.dates as mdates
 import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import FuncFormatter
+import statsmodels.api as sm
 
 # Set the style for all plots
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -76,6 +77,126 @@ def load_and_prepare_data(backtest_path="results/backtest_results.csv",
     
     return combined_df
 
+def plot_risk_ratios(data, window=150):
+    """
+    Compute and plot the rolling Sharpe, Sortino, and Calmar ratios on a single graph.
+    
+    Parameters:
+      data (DataFrame): Must contain a 'date' column (datetime) and a 'daily_return' column (in percentage).
+      window (int): Rolling window in days to compute the risk metrics.
+    """
+    # Ensure the date column is in datetime format
+    data['date'] = pd.to_datetime(data['date'])
+    
+    # Convert daily returns from percentage to decimals.
+    daily_ret = data['daily_return'] / 100.0  
+    risk_free_rate = 0.045 / 252.0  # Daily risk-free rate
+    
+    # Excess returns relative to risk-free rate.
+    rolling_excess_ret = daily_ret - risk_free_rate
+    
+    # Rolling Sharpe Ratio:
+    rolling_sharpe = (rolling_excess_ret.rolling(window).mean() / 
+                        rolling_excess_ret.rolling(window).std()) * np.sqrt(252)
+    
+    # Rolling Sortino Ratio:
+    negative_returns = rolling_excess_ret.copy()
+    negative_returns[negative_returns > 0] = 0  # only keep negative returns
+    rolling_sortino = (rolling_excess_ret.rolling(window).mean() /
+                         negative_returns.rolling(window).std().replace(0, np.nan)) * np.sqrt(252)
+    
+    # Rolling Calmar Ratio:
+    # Define a helper function to compute Calmar over a window.
+    def rolling_calmar_calc(x):
+        cum_returns = np.cumprod(1 + x)
+        dd = (cum_returns - np.maximum.accumulate(cum_returns)) / np.maximum.accumulate(cum_returns)
+        max_dd = dd.min()  # maximum drawdown over the window (negative or zero)
+        ann_ret = np.mean(x) * 252
+        return -ann_ret / max_dd if max_dd < 0 else np.nan
+    rolling_calmar = daily_ret.rolling(window).apply(rolling_calmar_calc, raw=True)
+    
+    # Create the risk ratios plot.
+    plt.figure(figsize=(12, 6))
+    plt.plot(data['date'], rolling_sharpe, label="Rolling Sharpe", linewidth=2)
+    plt.plot(data['date'], rolling_sortino, label="Rolling Sortino", linewidth=2)
+    plt.plot(data['date'], rolling_calmar, label="Rolling Calmar", linewidth=2)
+    plt.title(f"Rolling Risk Ratios (window = {window} days)")
+    plt.xlabel("Date")
+    plt.ylabel("Risk Ratio Value")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("plots/risk_ratios.png", dpi=300, bbox_inches="tight")
+    plt.close()
+    print("Risk ratios plot saved as 'plots/risk_ratios.png'.")
+
+def plot_risk_ratios_with_returns(data, window=150):
+    """
+    Compute and plot the rolling risk ratios (Sharpe, Sortino, Calmar) along with
+    the portfolio’s cumulative return on a twin-axis plot.
+    
+    Parameters:
+      data (DataFrame): Must contain 'date', 'daily_return', and (optionally) 'cum_strategy_return'.
+      window (int): Rolling window in days for computing the risk metrics.
+    """
+    # Ensure the date column is in datetime format
+    data['date'] = pd.to_datetime(data['date'])
+    
+    # Compute risk metrics as before.
+    daily_ret = data['daily_return'] / 100.0  
+    risk_free_rate = 0.045 / 252.0  
+    rolling_excess_ret = daily_ret - risk_free_rate
+    rolling_sharpe = (rolling_excess_ret.rolling(window).mean() / 
+                        rolling_excess_ret.rolling(window).std()) * np.sqrt(252)
+    negative_returns = rolling_excess_ret.copy()
+    negative_returns[negative_returns > 0] = 0
+    rolling_sortino = (rolling_excess_ret.rolling(window).mean() /
+                         negative_returns.rolling(window).std().replace(0, np.nan)) * np.sqrt(252)
+    def rolling_calmar_calc(x):
+        cum_returns = np.cumprod(1 + x)
+        dd = (cum_returns - np.maximum.accumulate(cum_returns)) / np.maximum.accumulate(cum_returns)
+        max_dd = dd.min()
+        ann_ret = np.mean(x) * 252
+        return -ann_ret / max_dd if max_dd < 0 else np.nan
+    rolling_calmar = daily_ret.rolling(window).apply(rolling_calmar_calc, raw=True)
+    
+    # Prepare the portfolio cumulative return.
+    # If 'cum_strategy_return' exists, use it; otherwise, compute cumulative return.
+    if 'cum_strategy_return' in data.columns:
+        cum_return = data['cum_strategy_return'] * 100  # Convert to percentage.
+    else:
+        cum_return = ((daily_ret + 1).cumprod() - 1) * 100
+    
+    # Create twin-axis plot.
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # Plot risk ratios on the primary y-axis.
+    ax1.plot(data['date'], rolling_sharpe, label="Sharpe", color='tab:blue', linewidth=2)
+    ax1.plot(data['date'], rolling_sortino, label="Sortino", color='tab:green', linewidth=2)
+    ax1.plot(data['date'], rolling_calmar, label="Calmar", color='tab:orange', linewidth=2)
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("Risk Ratio Value", color='black')
+    ax1.tick_params(axis='y', labelcolor='black')
+    
+    # Create a second y-axis for the portfolio cumulative return.
+    ax2 = ax1.twinx()
+    ax2.plot(data['date'], cum_return, label="Cumulative Return", color='tab:red', 
+             linewidth=2, linestyle='--')
+    ax2.set_ylabel("Cumulative Return (%)", color='tab:red')
+    ax2.tick_params(axis='y', labelcolor='tab:red')
+    
+    # Combine legends from both axes.
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='best')
+    
+    plt.title(f"Risk Ratios with Portfolio Cumulative Return (window = {window} days)")
+    fig.tight_layout()
+    plt.savefig("plots/risk_ratios_with_returns.png", dpi=300, bbox_inches="tight")
+    plt.close()
+    
+    print("Composite plot of risk ratios and portfolio cumulative return saved as 'plots/risk_ratios_with_returns.png'.")
+
 # Update the main function to include the logarithmic plot
 def create_trading_strategy_visualizations(data):
     """Create a comprehensive set of visualizations for the trading strategy"""
@@ -104,10 +225,19 @@ def create_trading_strategy_visualizations(data):
     
     # 7. Rolling Performance Metrics (Sharpe, Sortino, Win Rate)
     plot_rolling_metrics(data)
+
+    # 8. Linear Regression of Log Cumulative Returns
+    plot_log_portfolio_regression(data)
     
-    # 8. Monthly Returns: Market vs Strategy
+    # 9. Monthly Returns: Market vs Strategy
     plot_monthly_returns(data)
-    
+
+    # 10. Risk metrics on the same plot
+    plot_risk_ratios(data)
+
+    # 11. Risk metrics with cumulative returns
+    plot_risk_ratios_with_returns(data)
+
     print("All visualizations have been saved to the 'plots/' directory.")
     
 def plot_drawdown(data):
@@ -138,7 +268,7 @@ def plot_drawdown(data):
                 color='darkred', s=100, zorder=5)
     plt.annotate(f'Max DD: {drawdown.min():.2f}%', 
                 xy=(data.loc[max_dd_idx, 'date'], drawdown.min()),
-                xytext=(15, -30), textcoords='offset points',
+                xytext=(15, 30), textcoords='offset points',
                 arrowprops=dict(arrowstyle='->', color='black'))
     
     plt.tight_layout()
@@ -354,26 +484,52 @@ def plot_regime_returns(data):
     plt.close()
 
 def plot_rolling_metrics(data):
-    """Plot rolling Sharpe, Sortino, and Win Rate"""
+    """Plot rolling Sharpe, Sortino, and Win Rate and print the dates with highest/lowest values."""
     # Constants
-    window = 60  # 60-day rolling window
-    risk_free_rate = 0.02 / 252  # Daily risk-free rate (2% annually)
+    window = 150  # 60-day rolling window
+    risk_free_rate = 0.045 / 252  # Daily risk-free rate (2% annually)
     
     # Calculate necessary rolling metrics
     # 1. Rolling Sharpe Ratio
     rolling_ret = data['daily_return'] / 100  # Convert to decimal
     rolling_excess_ret = rolling_ret - risk_free_rate
     rolling_sharpe = (rolling_excess_ret.rolling(window).mean() / 
-                     rolling_excess_ret.rolling(window).std()) * np.sqrt(252)
+                      rolling_excess_ret.rolling(window).std()) * np.sqrt(252)
     
     # 2. Rolling Sortino Ratio
+    # Only consider negative deviation for downside risk
     negative_returns = rolling_excess_ret.copy()
     negative_returns[negative_returns > 0] = 0
     rolling_sortino = (rolling_excess_ret.rolling(window).mean() / 
-                      negative_returns.rolling(window).std().replace(0, np.nan)) * np.sqrt(252)
+                       negative_returns.rolling(window).std().replace(0, np.nan)) * np.sqrt(252)
     
-    # 3. Rolling Win Rate
+    # 3. Rolling Win Rate (% of days with positive returns)
     rolling_win_rate = (rolling_ret > 0).rolling(window).mean() * 100
+    
+    # Print the dates where the rolling metrics reached highest and lowest values.
+    # Note: idxmax()/idxmin() returns the index of the max/min value.
+    # We then retrieve the date corresponding to that index in the data['date'] column.
+    
+    # Sharpe Ratio
+    sharpe_max_idx = rolling_sharpe.idxmax()
+    sharpe_min_idx = rolling_sharpe.idxmin()
+    sharpe_max_date = data['date'].iloc[sharpe_max_idx] if pd.notnull(sharpe_max_idx) else "N/A"
+    sharpe_min_date = data['date'].iloc[sharpe_min_idx] if pd.notnull(sharpe_min_idx) else "N/A"
+    print("Sharpe Ratio - Highest on:", sharpe_max_date, "| Lowest on:", sharpe_min_date)
+    
+    # Sortino Ratio
+    sortino_max_idx = rolling_sortino.idxmax()
+    sortino_min_idx = rolling_sortino.idxmin()
+    sortino_max_date = data['date'].iloc[sortino_max_idx] if pd.notnull(sortino_max_idx) else "N/A"
+    sortino_min_date = data['date'].iloc[sortino_min_idx] if pd.notnull(sortino_min_idx) else "N/A"
+    print("Sortino Ratio - Highest on:", sortino_max_date, "| Lowest on:", sortino_min_date)
+    
+    # Win Rate
+    winrate_max_idx = rolling_win_rate.idxmax()
+    winrate_min_idx = rolling_win_rate.idxmin()
+    winrate_max_date = data['date'].iloc[winrate_max_idx] if pd.notnull(winrate_max_idx) else "N/A"
+    winrate_min_date = data['date'].iloc[winrate_min_idx] if pd.notnull(winrate_min_idx) else "N/A"
+    print("Win Rate - Highest on:", winrate_max_date, "| Lowest on:", winrate_min_date)
     
     # Create three separate plots
     fig, axes = plt.subplots(3, 1, figsize=(12, 15), sharex=True)
@@ -382,7 +538,7 @@ def plot_rolling_metrics(data):
     axes[0].plot(data['date'], rolling_sharpe, color='green', linewidth=2)
     axes[0].axhline(y=0, color='gray', linestyle='--', alpha=0.7)
     axes[0].axhline(y=1, color='gray', linestyle='--', alpha=0.7)
-    axes[0].set_title('Rolling 60-Day Sharpe Ratio')
+    axes[0].set_title('Rolling 150-Day Sharpe Ratio')
     axes[0].set_ylabel('Sharpe Ratio')
     axes[0].grid(True, alpha=0.3)
     
@@ -390,14 +546,14 @@ def plot_rolling_metrics(data):
     axes[1].plot(data['date'], rolling_sortino, color='purple', linewidth=2)
     axes[1].axhline(y=0, color='gray', linestyle='--', alpha=0.7)
     axes[1].axhline(y=1, color='gray', linestyle='--', alpha=0.7)
-    axes[1].set_title('Rolling 60-Day Sortino Ratio')
+    axes[1].set_title('Rolling 150-Day Sortino Ratio')
     axes[1].set_ylabel('Sortino Ratio')
     axes[1].grid(True, alpha=0.3)
     
     # Plot Rolling Win Rate
     axes[2].plot(data['date'], rolling_win_rate, color='blue', linewidth=2)
     axes[2].axhline(y=50, color='gray', linestyle='--', alpha=0.7)
-    axes[2].set_title('Rolling 60-Day Win Rate')
+    axes[2].set_title('Rolling 150-Day Win Rate')
     axes[2].set_ylabel('Win Rate (%)')
     axes[2].yaxis.set_major_formatter(FuncFormatter(percentage_formatter))
     axes[2].grid(True, alpha=0.3)
@@ -408,6 +564,51 @@ def plot_rolling_metrics(data):
     plt.tight_layout()
     plt.savefig('plots/rolling_metrics.png', dpi=300, bbox_inches='tight')
     plt.close()
+
+def plot_log_portfolio_regression(data):
+    """
+    Plot a linear regression of the log(portfolio) values over time and annotate with R².
+    
+    Instead of using raw date numbers (which can be large), the time variable is transformed
+    into the number of days since the first date in the dataset.
+    """
+    # Ensure date is datetime
+    data['date'] = pd.to_datetime(data['date'])
+    
+    # Calculate log portfolio (assuming the portfolio starts at 1 or similar scale)
+    log_portfolio = np.log(data["portfolio"])
+    
+    # Compute time as the number of days since the first date
+    time_in_days = (data["date"] - data["date"].min()).dt.days
+    # Add constant for the intercept
+    X = sm.add_constant(time_in_days)
+    
+    # Fit the linear regression model with statsmodels
+    model = sm.OLS(log_portfolio, X).fit()
+    r2_value = model.rsquared
+    
+    # Generate predicted log portfolio values from the model
+    log_portfolio_fit = model.predict(X)
+    
+    # Create the plot
+    plt.figure(figsize=(12, 6))
+    plt.scatter(data['date'], log_portfolio, color="blue", alpha=0.6, label="Log(Portfolio)")
+    plt.plot(data['date'], log_portfolio_fit, color="red", linewidth=2, 
+             label=f"Linear Fit (R² = {r2_value:.4f})")
+    
+    # Formatting and labels
+    plt.title("Linear Regression of Log Portfolio Values")
+    plt.xlabel("Date")
+    plt.ylabel("Log(Portfolio)")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    # Save the plot
+    plt.savefig("plots/log_portfolio_regression.png", dpi=300, bbox_inches="tight")
+    plt.close()
+    
+    print(f"Linear regression plot saved as 'plots/log_portfolio_regression.png' with R² = {r2_value:.4f}")
 
 def plot_monthly_returns(data):
     """Create a heatmap of monthly returns for both strategy and market"""
